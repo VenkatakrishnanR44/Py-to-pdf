@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Python Code Bundler (PDF)</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Configure Tailwind to use the Inter font and enable focus-visible for better accessibility -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <!-- Load jsPDF library for client-side PDF generation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        /* Custom scrollbar styling for the file list */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background-color: #6366f1; /* Indigo-500 */
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #e0e7ff; /* Indigo-100 */
+        }
+        /* Style for draggable items */
+        #fileList li {
+            cursor: grab;
+            user-select: none;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen p-4 sm:p-8 font-sans">
+
+    <div class="max-w-4xl mx-auto bg-white shadow-2xl rounded-xl p-6 sm:p-10 border border-indigo-100">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl sm:text-4xl font-extrabold text-indigo-700 mb-2">Python Code Bundler (PDF)</h1>
+            <p class="text-gray-500">Select up to 25 **Python files (.py)** to compile into a single PDF document.</p>
+        </header>
+
+        <main class="space-y-6">
+
+            <!-- File Input Area -->
+            <div class="border-2 border-dashed border-indigo-300 bg-indigo-50 rounded-lg p-6 text-center hover:bg-indigo-100 transition duration-150">
+                <!-- Updated accept to only include Python files -->
+                <input type="file" id="fileInput" multiple accept=".py" class="hidden" onchange="displaySelectedFiles(this.files)">
+                <label for="fileInput" class="cursor-pointer text-indigo-600 font-semibold text-lg block">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8 mx-auto mb-2 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v8" />
+                    </svg>
+                    Drag & Drop .py Files Here or Click to Browse
+                </label>
+            </div>
+
+            <!-- Status and File List -->
+            <div id="statusMessage" class="h-6 text-sm font-medium text-center transition-opacity duration-300"></div>
+
+            <!-- PDF File Name Input (NEW) -->
+            <div class="mt-4">
+                <label for="pdfNameInput" class="block text-sm font-medium text-gray-700 mb-1">PDF File Name:</label>
+                <input type="text" id="pdfNameInput" value="python_project_bundle" class="w-full p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500" placeholder="e.g., my_final_code_report">
+            </div>
+
+            <div id="fileListContainer" class="hidden">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="text-lg font-semibold text-gray-700">Selected Files (<span id="fileCount">0</span>):</h3>
+                </div>
+                <ul id="fileList" class="max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-3 space-y-2 bg-white custom-scrollbar">
+                    <!-- File names will be inserted here. Drag and Drop functionality is now handled here. -->
+                </ul>
+            </div>
+
+            <!-- Generate Button -->
+            <button id="generateBtn" onclick="generatePDF()" class="w-full py-3 px-4 bg-indigo-600 text-white font-bold rounded-lg shadow-md hover:bg-indigo-700 transition duration-150 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2" disabled>
+                <span id="buttonText">Generate Single PDF</span>
+                <svg id="loadingSpinner" class="animate-spin h-5 w-5 text-white hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+            </button>
+        </main>
+    </div>
+
+    <script>
+        // Use a namespace for the window.jspdf object
+        const jsPDF = window.jspdf.jsPDF;
+
+        const MAX_TOTAL_FILES = 25;
+        
+        const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+        const fileListContainer = document.getElementById('fileListContainer');
+        const fileCountSpan = document.getElementById('fileCount');
+        const generateBtn = document.getElementById('generateBtn');
+        const statusMessage = document.getElementById('statusMessage');
+        const loadingSpinner = document.getElementById('loadingSpinner');
+        const buttonText = document.getElementById('buttonText');
+        // Get the new PDF name input
+        const pdfNameInput = document.getElementById('pdfNameInput'); 
+
+        let selectedFiles = []; // Holds all currently selected files
+        let dragStartIndex = -1; // New state variable for drag-and-drop
+
+        /**
+         * Clears the status message after a brief delay.
+         * @param {string} msg The message to display.
+         * @param {string} color Tailwind color class for the text.
+         */
+        function setStatus(msg, color = 'text-gray-600') {
+            statusMessage.textContent = msg;
+            statusMessage.className = `h-6 text-sm font-medium text-center ${color} transition-opacity duration-300`;
+            setTimeout(() => {
+                statusMessage.textContent = '';
+                statusMessage.className = 'h-6 text-sm font-medium text-center transition-opacity duration-300';
+            }, 5000);
+        }
+
+        /**
+         * Removes a file from the list by its index and triggers a UI update.
+         * @param {number} index The index of the file to remove in the selectedFiles array.
+         */
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            updateUIAndValidate();
+            setStatus('File removed successfully.', 'text-gray-600');
+        }
+
+        /**
+         * Finds the parent LI element from a drag event target.
+         * @param {HTMLElement} element The starting element of the drag event.
+         * @returns {HTMLElement | null} The parent <li> element or null.
+         */
+        function getDraggableTarget(element) {
+            while (element && element.tagName !== 'LI') {
+                element = element.parentElement;
+            }
+            return element;
+        }
+
+        // --- Drag and Drop Handlers ---
+
+        function handleDragStart(e) {
+            // e.currentTarget is the <li> element
+            dragStartIndex = parseInt(e.currentTarget.dataset.index);
+            e.dataTransfer.effectAllowed = 'move';
+            // Add visual feedback to the dragged item
+            setTimeout(() => {
+                e.currentTarget.classList.add('opacity-50', 'border-dashed', 'border-2', 'border-indigo-500');
+            }, 0);
+        }
+
+        function handleDragOver(e) {
+            e.preventDefault(); // Necessary to allow drop
+            e.dataTransfer.dropEffect = 'move';
+            
+            // Visual feedback for drop location
+            const target = getDraggableTarget(e.target);
+            
+            // Clear all existing drop indicators
+            Array.from(fileList.children).forEach(item => item.classList.remove('border-b-4', 'border-t-4', 'border-indigo-400'));
+
+            if (target && target.dataset.index !== dragStartIndex.toString()) {
+                // Determine if we're dragging over the top or bottom half of the target
+                const rect = target.getBoundingClientRect();
+                const offsetY = e.clientY - rect.top;
+
+                if (offsetY < rect.height / 2) {
+                    // Dropping before the target
+                    target.classList.add('border-t-4', 'border-indigo-400');
+                } else {
+                    // Dropping after the target
+                    target.classList.add('border-b-4', 'border-indigo-400');
+                }
+            }
+        }
+        
+        function handleDragLeave(e) {
+            // Clear drop indicator when dragging away from an item
+            const target = getDraggableTarget(e.target);
+            if (target) {
+                target.classList.remove('border-b-4', 'border-t-4', 'border-indigo-400');
+            }
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            
+            // Find the target LI element
+            const dropTarget = getDraggableTarget(e.target);
+
+            // Clear all drop indicators immediately
+            Array.from(fileList.children).forEach(item => item.classList.remove('border-b-4', 'border-t-4', 'border-indigo-400'));
+
+            if (!dropTarget || dragStartIndex === -1) {
+                return;
+            }
+            
+            const dropIndex = parseInt(dropTarget.dataset.index);
+            let dragEndIndex = dropIndex;
+            
+            // Calculate actual insertion index based on drop position
+            const rect = dropTarget.getBoundingClientRect();
+            const offsetY = e.clientY - rect.top;
+            
+            // If dropping on the bottom half, insert *after* the target index
+            if (offsetY > rect.height / 2) {
+                 dragEndIndex = dropIndex + 1;
+            }
+            // If dropping on the top half, insert *at* the target index (default)
+
+            if (dragStartIndex === dragEndIndex || (dragStartIndex + 1 === dragEndIndex && dragStartIndex < dragEndIndex)) {
+                // Item dropped back onto itself or just one step down when it was already ordered
+                return;
+            }
+
+            // Reorder the actual data array
+            reorderFiles(dragStartIndex, dragEndIndex);
+        }
+
+        function handleDragEnd(e) {
+            // Reset visual state and drag index for ALL list items
+            dragStartIndex = -1;
+            Array.from(fileList.children).forEach(item => {
+                item.classList.remove('opacity-50', 'border-dashed', 'border-2', 'border-indigo-500', 'border-b-4', 'border-t-4', 'border-indigo-400');
+            });
+        }
+
+        function reorderFiles(fromIndex, toIndex) {
+            // Correct the 'toIndex' if the item is moving up in the array
+            const finalToIndex = (fromIndex < toIndex) ? toIndex - 1 : toIndex;
+
+            const [movedFile] = selectedFiles.splice(fromIndex, 1);
+            selectedFiles.splice(finalToIndex, 0, movedFile);
+            
+            // Update the UI to reflect the new order
+            updateUIAndValidate(); 
+            setStatus(`File order updated! ${movedFile.name} moved.`, 'text-indigo-600');
+        }
+
+        // --- UI Rendering and Validation ---
+
+        /**
+         * Renders the file list to the UI based on the current selectedFiles array.
+         */
+        function renderFileList() {
+            fileList.innerHTML = '';
+            
+            let pyCount = 0;
+            selectedFiles.forEach((file, index) => {
+                // We know files are .py due to validation, but we count them here
+                pyCount++;
+
+                const listItem = document.createElement('li');
+                listItem.className = 'flex items-center justify-between text-sm text-gray-700 bg-white p-2 rounded-md border border-gray-100 truncate group hover:bg-indigo-50 transition duration-100';
+
+                // Fixed style for Python files
+                const icon = '🐍';
+                const colorClass = 'font-mono text-indigo-700';
+                const infoText = ' (Code to be included)';
+                
+                // File name and information span
+                const fileInfoSpan = document.createElement('span');
+                fileInfoSpan.className = 'truncate pr-2';
+                fileInfoSpan.innerHTML = `<span class="${colorClass}">${icon} ${file.name}</span> <span class="text-xs text-gray-500">${infoText}</span>`;
+
+                // Remove button
+                const removeButton = document.createElement('button');
+                removeButton.className = 'text-gray-400 hover:text-red-600 transition duration-150 p-1 rounded-full opacity-0 group-hover:opacity-100 focus:opacity-100 focus:outline-none';
+                removeButton.innerHTML = `
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                `;
+                removeButton.onclick = () => removeFile(index);
+
+                listItem.appendChild(fileInfoSpan);
+                listItem.appendChild(removeButton);
+                
+                // Add Drag-and-Drop listeners and data to the list item
+                listItem.draggable = true;
+                listItem.dataset.index = index;
+                listItem.addEventListener('dragstart', handleDragStart);
+                listItem.addEventListener('dragover', handleDragOver);
+                listItem.addEventListener('dragleave', handleDragLeave);
+                listItem.addEventListener('drop', handleDrop);
+                listItem.addEventListener('dragend', handleDragEnd);
+
+                fileList.appendChild(listItem);
+            });
+            
+             // Display summary status
+            if (selectedFiles.length > 0) {
+                let status = `Found ${pyCount} Python file(s). Drag and drop to reorder files.`;
+                 setStatus(status, 'text-gray-600');
+            }
+        }
+
+        /**
+         * Re-validates the entire selectedFiles array against limits and updates the UI.
+         */
+        function updateUIAndValidate() {
+            // 1. Recount and filter based on limits
+            let statusMessage = '';
+            
+            // Filter to only keep .py files (removes any old PDF files if they were still present)
+            let tempCombinedFiles = selectedFiles.filter(file => file.name.endsWith('.py'));
+            let pyCount = tempCombinedFiles.length;
+
+
+            // Enforce total limit
+            if (pyCount > MAX_TOTAL_FILES) {
+                tempCombinedFiles = tempCombinedFiles.slice(0, MAX_TOTAL_FILES);
+                statusMessage = `Warning: Only the first ${MAX_TOTAL_FILES} files are included.`;
+                pyCount = MAX_TOTAL_FILES;
+            }
+
+            // Update the main selected array with the filtered/limited list
+            selectedFiles = tempCombinedFiles;
+
+            // 2. Render UI
+            renderFileList(); 
+            if (statusMessage) {
+                setStatus(statusMessage, 'text-yellow-600');
+            }
+
+            // 3. Update button/state
+            const totalSelected = selectedFiles.length;
+            fileCountSpan.textContent = totalSelected;
+            
+            if (totalSelected > 0) {
+                fileListContainer.classList.remove('hidden');
+                generateBtn.disabled = false;
+            } else {
+                fileListContainer.classList.add('hidden');
+                generateBtn.disabled = true;
+                setStatus('No files selected.', 'text-gray-600');
+            }
+        }
+
+        /**
+         * Handles file selection by adding new files to the existing list.
+         * @param {FileList} newFiles The files selected from the input.
+         */
+        function displaySelectedFiles(newFiles) {
+            if (newFiles.length === 0) return;
+
+            Array.from(newFiles).forEach(file => {
+                // Prevent duplicates by checking name and size
+                const isDuplicate = selectedFiles.some(f => f.name === file.name && f.size === file.size);
+                
+                if (!isDuplicate) {
+                     // Check extension: only allow .py now
+                    const extension = file.name.split('.').pop().toLowerCase();
+                    if (extension === 'py') {
+                         selectedFiles.push(file);
+                    } else {
+                        setStatus(`File ignored: ${file.name} must be a .py file.`, 'text-red-600');
+                    }
+                }
+            });
+            
+            // Now update UI and validate the entire list
+            updateUIAndValidate();
+        }
+
+        /**
+         * Reads the content of all selected PYTHON files into an array of objects.
+         * @returns {Promise<Array<{filename: string, content: string}>>}
+         */
+        function readFilesContent() {
+            // Since selectedFiles only contains .py files, we can use the whole array
+            const pyFiles = selectedFiles;
+
+            return new Promise((resolve, reject) => {
+                if (pyFiles.length === 0) {
+                    return resolve([]);
+                }
+
+                const fileContents = [];
+                let filesRead = 0;
+
+                pyFiles.forEach(file => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        fileContents.push({
+                            filename: file.name,
+                            content: e.target.result
+                        });
+
+                        filesRead++;
+                        if (filesRead === pyFiles.length) {
+                            resolve(fileContents);
+                        }
+                    };
+                    reader.onerror = (e) => {
+                        console.error("Error reading file:", file.name, e);
+                        filesRead++;
+                        if (filesRead === pyFiles.length) {
+                            resolve(fileContents);
+                        }
+                    };
+                    reader.readAsText(file);
+                });
+            });
+        }
+
+        /**
+         * Core function to generate the PDF from file contents.
+         */
+        async function generatePDF() {
+            if (selectedFiles.length === 0) {
+                setStatus('No files selected. Please select files first.', 'text-red-600');
+                return;
+            }
+
+            // Get the custom PDF name, trim whitespace, and use a default if empty
+            const rawPdfName = pdfNameInput.value.trim();
+            const finalPdfName = (rawPdfName || 'python_project_bundle') + '.pdf';
+
+            // Show loading state
+            generateBtn.disabled = true;
+            buttonText.textContent = 'Generating...';
+            loadingSpinner.classList.remove('hidden');
+            setStatus('Reading Python files and compiling PDF...', 'text-indigo-600');
+
+            try {
+                // Process Python files based on the current order in selectedFiles
+                const pyFilesContent = await readFilesContent();
+                
+                if (pyFilesContent.length === 0) { 
+                    setStatus('No Python code found to generate PDF.', 'text-red-600');
+                    return;
+                }
+
+                // Initialize PDF
+                const doc = new jsPDF();
+                const margin = 15; // 15mm margin
+                const pageWidth = doc.internal.pageSize.getWidth();
+                const contentWidth = pageWidth - (2 * margin);
+
+                let y = margin;
+                const lineHeight = 4.5; // Approximate line height for font size 9
+
+                // Iterate through selectedFiles (all of which are now .py files)
+                for (const file of selectedFiles) {
+                    
+                    // Add New Page if necessary for the next file header
+                    if (y > doc.internal.pageSize.getHeight() - margin - 15) { 
+                        doc.addPage();
+                        y = margin;
+                    }
+
+                    // Find the corresponding content for this file
+                    const fileData = pyFilesContent.find(c => c.filename === file.name);
+                    if (!fileData) continue; 
+
+                    // --- Handle Python Code ---
+                    doc.setFont('Helvetica', 'bold');
+                    doc.setFontSize(14);
+                    doc.setTextColor(30, 58, 138); // Indigo-700
+                    doc.text(`File: ${fileData.filename}`, margin, y);
+                    y += 8;
+                    
+                    // Add a separator line
+                    doc.setDrawColor(200, 200, 200);
+                    doc.setLineWidth(0.5);
+                    doc.line(margin, y, pageWidth - margin, y);
+                    y += 3;
+
+                    // --- Add Code Content ---
+                    doc.setFont('Courier', 'normal'); // Monospace font for code
+                    doc.setFontSize(9);
+                    doc.setTextColor(0, 0, 0); // Black text
+
+                    // Split text to fit content width
+                    const textLines = doc.splitTextToSize(fileData.content, contentWidth);
+
+                    // Check page break for the code block
+                    let currentY = y;
+                    for (const line of textLines) {
+                        if (currentY + lineHeight > doc.internal.pageSize.getHeight() - margin) {
+                            doc.addPage();
+                            currentY = margin;
+                        }
+                        doc.text(line, margin, currentY);
+                        currentY += lineHeight;
+                    }
+                    
+                    y = currentY + 5; // Add spacing after the code block
+
+                    // Add a separator space after processing
+                    y += 5; 
+                }
+
+                // Save the PDF using the custom name
+                doc.save(finalPdfName);
+
+                const summaryMessage = `Successfully generated PDF containing ${pyFilesContent.length} Python file(s) as **${finalPdfName}**!`;
+                setStatus(summaryMessage, 'text-green-600');
+
+            } catch (error) {
+                console.error("PDF Generation Error:", error);
+                setStatus('An error occurred during PDF generation.', 'text-red-600');
+            } finally {
+                // Reset loading state
+                updateUIAndValidate(); // Re-validate handles resetting button states
+                buttonText.textContent = 'Generate Single PDF';
+                loadingSpinner.classList.add('hidden');
+            }
+        }
+    </script>
+</body>
+</html>
